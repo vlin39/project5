@@ -114,4 +114,7 @@ def solve(data, time_limit=None, seed=1, config=None):
         seed2 = rng.randrange(10**9)
         noise2 = rng.choice(noise_levels)
         return clarke_wright(data, random.Random(seed2), noise=noise2)
-    return finish_with_ils(data, best, time_limit=remaining, seed=seed + 424242, restart_factory=final_restart_factory, config=config)
+    final_routes, final_cost = finish_with_ils(data, best, time_limit=remaining, seed=seed + 424242, restart_factory=final_restart_factory, config=config)
+    if final_cost + 1e-9 < best_cost:
+        return final_routes, final_cost
+    return best, best_cost

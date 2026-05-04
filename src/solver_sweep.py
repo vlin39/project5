@@ -118,4 +118,7 @@ def solve(data, time_limit=None, seed=2, config=None):
         rev2 = use_reverse and (rng.random() < 0.5)
         shuf2 = use_shuffle_ties and (rng.random() < 0.5)
         return sweep_construct(data, off2, reverse=rev2, shuffle_ties=shuf2, rng=rng)
-    return finish_with_ils(data, best, time_limit=remaining, seed=seed + 777777, restart_factory=final_restart_factory, config=config)
+    final_routes, final_cost = finish_with_ils(data, best, time_limit=remaining, seed=seed + 777777, restart_factory=final_restart_factory, config=config)
+    if final_cost + 1e-9 < best_cost:
+        return final_routes, final_cost
+    return best, best_cost

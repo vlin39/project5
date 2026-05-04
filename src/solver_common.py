@@ -155,14 +155,18 @@ def two_opt_route(data, route, deadline=None):
     return False
 
 
-def improve_routes(data, routes, deadline=None, max_passes=20):
+def improve_routes(data, routes, deadline=None, max_passes=100):
     routes = normalize_routes(data, routes)
     loads = [route_load(data, r) for r in routes]
     d = data.dist
+    demand = data.demand
+    capacity = data.capacity
     passes = 0
     while passes < max_passes and (deadline is None or time.time() < deadline):
         passes += 1
         improved = False
+
+        # In-route 2-opt — drained for each route
         for r in routes:
             while deadline is None or time.time() < deadline:
                 if not two_opt_route(data, r, deadline):
@@ -170,81 +174,128 @@ def improve_routes(data, routes, deadline=None, max_passes=20):
                 improved = True
         if deadline is not None and time.time() >= deadline:
             break
-        moved = False
-        for ai, ra in enumerate(routes):
-            if moved or (deadline is not None and time.time() >= deadline): break
-            for pos in range(1, len(ra) - 1):
-                if moved or (deadline is not None and time.time() >= deadline): break
-                c = ra[pos]
-                remove_delta = d[ra[pos - 1]][ra[pos + 1]] - d[ra[pos - 1]][c] - d[c][ra[pos + 1]]
-                for bi, rb in enumerate(routes):
-                    if moved or (deadline is not None and time.time() >= deadline): break
-                    if ai != bi and loads[bi] + data.demand[c] > data.capacity:
-                        continue
-                    for ins in range(1, len(rb)):
-                        if ai == bi and (ins == pos or ins == pos + 1):
+
+        # Cross-route relocate — keep finding improving moves until none found this pass
+        local_improved = True
+        while local_improved and (deadline is None or time.time() < deadline):
+            local_improved = False
+            for ai in range(len(routes)):
+                if deadline is not None and time.time() >= deadline:
+                    break
+                ra = routes[ai]
+                pos = 1
+                while pos < len(ra) - 1:
+                    if deadline is not None and time.time() >= deadline:
+                        break
+                    c = ra[pos]
+                    remove_delta = d[ra[pos - 1]][ra[pos + 1]] - d[ra[pos - 1]][c] - d[c][ra[pos + 1]]
+                    moved_here = False
+                    for bi in range(len(routes)):
+                        rb = routes[bi]
+                        if ai != bi and loads[bi] + demand[c] > capacity:
                             continue
-                        before, after = rb[ins - 1], rb[ins]
-                        delta = remove_delta + d[before][c] + d[c][after] - d[before][after]
-                        if delta < -1e-9:
-                            ra.pop(pos)
-                            if ai == bi and ins > pos:
-                                ins -= 1
-                            rb.insert(ins, c)
-                            if ai != bi:
-                                loads[ai] -= data.demand[c]
-                                loads[bi] += data.demand[c]
-                            moved = improved = True
+                        for ins in range(1, len(rb)):
+                            if ai == bi and (ins == pos or ins == pos + 1):
+                                continue
+                            before, after = rb[ins - 1], rb[ins]
+                            delta = remove_delta + d[before][c] + d[c][after] - d[before][after]
+                            if delta < -1e-9:
+                                ra.pop(pos)
+                                if ai == bi and ins > pos:
+                                    ins -= 1
+                                rb.insert(ins, c)
+                                if ai != bi:
+                                    loads[ai] -= demand[c]
+                                    loads[bi] += demand[c]
+                                local_improved = improved = True
+                                moved_here = True
+                                break
+                        if moved_here:
                             break
+                    if not moved_here:
+                        pos += 1
+                    # else: customer at pos changed; re-test same pos
         if deadline is not None and time.time() >= deadline:
             break
-        swapped = False
-        for ai in range(len(routes)):
-            if swapped or (deadline is not None and time.time() >= deadline): break
-            ra = routes[ai]
-            for bi in range(ai + 1, len(routes)):
-                if swapped or (deadline is not None and time.time() >= deadline): break
-                rb = routes[bi]
-                for pa in range(1, len(ra) - 1):
-                    if swapped or (deadline is not None and time.time() >= deadline): break
-                    ca = ra[pa]
-                    for pb in range(1, len(rb) - 1):
-                        cb = rb[pb]
-                        if loads[ai] - data.demand[ca] + data.demand[cb] > data.capacity: continue
-                        if loads[bi] - data.demand[cb] + data.demand[ca] > data.capacity: continue
-                        old = d[ra[pa - 1]][ca] + d[ca][ra[pa + 1]] + d[rb[pb - 1]][cb] + d[cb][rb[pb + 1]]
-                        new = d[ra[pa - 1]][cb] + d[cb][ra[pa + 1]] + d[rb[pb - 1]][ca] + d[ca][rb[pb + 1]]
-                        if new + 1e-9 < old:
-                            ra[pa], rb[pb] = cb, ca
-                            loads[ai] += data.demand[cb] - data.demand[ca]
-                            loads[bi] += data.demand[ca] - data.demand[cb]
-                            swapped = improved = True
+
+        # Cross-route swap — multi-improvement per pass
+        local_improved = True
+        while local_improved and (deadline is None or time.time() < deadline):
+            local_improved = False
+            for ai in range(len(routes)):
+                if deadline is not None and time.time() >= deadline:
+                    break
+                ra = routes[ai]
+                for bi in range(ai + 1, len(routes)):
+                    if deadline is not None and time.time() >= deadline:
+                        break
+                    rb = routes[bi]
+                    pa = 1
+                    while pa < len(ra) - 1:
+                        if deadline is not None and time.time() >= deadline:
                             break
+                        ca = ra[pa]
+                        swapped_here = False
+                        for pb in range(1, len(rb) - 1):
+                            cb = rb[pb]
+                            if loads[ai] - demand[ca] + demand[cb] > capacity:
+                                continue
+                            if loads[bi] - demand[cb] + demand[ca] > capacity:
+                                continue
+                            old = d[ra[pa - 1]][ca] + d[ca][ra[pa + 1]] + d[rb[pb - 1]][cb] + d[cb][rb[pb + 1]]
+                            new = d[ra[pa - 1]][cb] + d[cb][ra[pa + 1]] + d[rb[pb - 1]][ca] + d[ca][rb[pb + 1]]
+                            if new + 1e-9 < old:
+                                ra[pa], rb[pb] = cb, ca
+                                loads[ai] += demand[cb] - demand[ca]
+                                loads[bi] += demand[ca] - demand[cb]
+                                local_improved = improved = True
+                                swapped_here = True
+                                break
+                        if not swapped_here:
+                            pa += 1
+                        # else: re-test pa with newly swapped-in customer
         if deadline is not None and time.time() >= deadline:
             break
-        exchanged = False
-        for ai in range(len(routes)):
-            if exchanged or (deadline is not None and time.time() >= deadline): break
-            for bi in range(ai + 1, len(routes)):
-                if exchanged or (deadline is not None and time.time() >= deadline): break
-                ra, rb = routes[ai], routes[bi]
-                for pa in range(1, len(ra) - 1):
-                    if exchanged or (deadline is not None and time.time() >= deadline): break
-                    tail_a = loads[ai] - sum(data.demand[x] for x in ra[1:pa])
-                    for pb in range(1, len(rb) - 1):
-                        head_b = sum(data.demand[x] for x in rb[1:pb])
-                        tail_b = loads[bi] - head_b
-                        new_la = loads[ai] - tail_a + tail_b
-                        new_lb = loads[bi] - tail_b + tail_a
-                        if new_la > data.capacity or new_lb > data.capacity: continue
-                        old = d[ra[pa - 1]][ra[pa]] + d[rb[pb - 1]][rb[pb]]
-                        new = d[ra[pa - 1]][rb[pb]] + d[rb[pb - 1]][ra[pa]]
-                        if new + 1e-9 < old:
-                            routes[ai] = ra[:pa] + rb[pb:-1] + [0]
-                            routes[bi] = rb[:pb] + ra[pa:-1] + [0]
-                            loads[ai], loads[bi] = new_la, new_lb
-                            exchanged = improved = True
+
+        # Cross-route segment exchange — multi-improvement per pass
+        local_improved = True
+        while local_improved and (deadline is None or time.time() < deadline):
+            local_improved = False
+            for ai in range(len(routes)):
+                if deadline is not None and time.time() >= deadline:
+                    break
+                for bi in range(ai + 1, len(routes)):
+                    if deadline is not None and time.time() >= deadline:
+                        break
+                    ra, rb = routes[ai], routes[bi]
+                    pa = 1
+                    while pa < len(ra) - 1:
+                        if deadline is not None and time.time() >= deadline:
                             break
+                        tail_a = loads[ai] - sum(demand[x] for x in ra[1:pa])
+                        exchanged_here = False
+                        for pb in range(1, len(rb) - 1):
+                            head_b = sum(demand[x] for x in rb[1:pb])
+                            tail_b = loads[bi] - head_b
+                            new_la = loads[ai] - tail_a + tail_b
+                            new_lb = loads[bi] - tail_b + tail_a
+                            if new_la > capacity or new_lb > capacity:
+                                continue
+                            old = d[ra[pa - 1]][ra[pa]] + d[rb[pb - 1]][rb[pb]]
+                            new = d[ra[pa - 1]][rb[pb]] + d[rb[pb - 1]][ra[pa]]
+                            if new + 1e-9 < old:
+                                routes[ai] = ra[:pa] + rb[pb:-1] + [0]
+                                routes[bi] = rb[:pb] + ra[pa:-1] + [0]
+                                ra, rb = routes[ai], routes[bi]
+                                loads[ai], loads[bi] = new_la, new_lb
+                                local_improved = improved = True
+                                exchanged_here = True
+                                break
+                        if exchanged_here:
+                            pa = 1  # routes mutated — restart the scan
+                        else:
+                            pa += 1
+
         if not improved:
             break
     return normalize_routes(data, routes)
@@ -381,7 +432,7 @@ def finish_with_ils(data, initial_routes, time_limit=DEFAULT_TIME_LIMIT, seed=0,
     deadline = time.time() + max(0.01, float(time_limit))
     rng = random.Random(seed)
     profile = ils_profile(data, time_limit, config)
-    current = improve_routes(data, initial_routes, deadline, max_passes=cfg(config, 'initial_ls_passes', max(8, profile['ls_passes'] + 2)))
+    current = improve_routes(data, initial_routes, deadline, max_passes=cfg(config, 'initial_ls_passes', max(50, profile['ls_passes'] + 2)))
     best = [r[:] for r in current]
     best_cost = solution_cost(data, best)
     no_improve = 0
