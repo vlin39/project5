@@ -1,37 +1,49 @@
 """
 Pure-Python portfolio CVRP solver — no external VRP libraries.
 
-The production solver for this project. Combines two construction families
-(Clarke-Wright savings and angular sweep) feeding a single ILS engine that
-has every B-series enhancement enabled:
+The production solver for this project. The "external library" prohibition
+rules out PyVRP and OR-Tools; classic algorithms (Split DP, GRASP+LNS,
+KNN candidate lists, etc.) are fair game and are used heavily.
+
+Construction-family portfolio
+-----------------------------
+  1. Clarke-Wright savings + ILS  (solver_savings.solve)
+  2. GRASP construction + LNS     (solver_grasp_lns.solve)
+       — k-means clusters, biggest-demand-first insertion, then LNS
+  3. Angular sweep + ILS          (solver_sweep.solve)
+  4. CW giant-tour + Split DP     (solver_split.solve)
+       — only included on instances with loose capacity headroom; on
+       capacity-tight instances the cardinality-constrained DP collapses
+       to the construction baseline so it is excluded by default.
+
+All four engines run the same enhanced ILS through `solver_common`, which
+has every B-series enhancement enabled here:
 
   B1. Or-opt   — relocate segments of length 2 and 3
   B2. 2-opt*   — true cross-route 2-opt edge exchange
-  B3. KNN candidate lists — restrict cross-route insertions to positions
-                             adjacent to one of c's K nearest neighbors
+  B3. KNN candidate lists — top-K nearest-neighbor pruning of cross-route
+                             insertions
   B4. Don't-look bits     — skip customers whose neighborhood was scanned
                              without improvement until a neighbor changes
   B5. SA acceptance       — temperature-cooled acceptance in finish_with_ils
   B6. SISR (string removal) — geographic-string destroy operator alongside
                               random / route / shaw
 
-All of the above live in `solver_common.py` and are toggled via the config
-dict. This module wires the toggles, picks an adaptive per-instance time
-budget (smaller instances converge in seconds), splits that budget between
-the two construction engines, and returns the best result found.
+This module wires the B1-B6 toggles, picks a per-instance time budget,
+allocates that budget across the engines (heaviest weight on savings — the
+empirical winner on this project's instance set, with smaller weights on
+the diversifier engines), runs them in sequence, and returns the best.
 
-The split is 80/20 in favour of savings, reflecting the empirical edge of
-CW + ILS over sweep + ILS on this project's input/ instance set; sweep is
-a cheap diversifier for the rare cases where its angular construction
-seeds a basin that CW misses (historically ~1/16 of instances).
-
-`solver_pyvrp_reference.py` lives in the tree as a reference baseline
-only and is NOT imported here.
+`solver_pyvrp_reference.py` is a separate file that wraps PyVRP and is
+explicitly NOT imported here; it is kept in the tree only as a baseline
+for diagnostic comparisons.
 """
 
 from solver_common import ensure_data, DEFAULT_TIME_LIMIT
 from solver_savings import solve as savings_solve
 from solver_sweep import solve as sweep_solve
+from solver_grasp_lns import solve as grasp_lns_solve
+from solver_split import solve as split_solve
 
 
 # Always-on engine extensions (B1-B6).
@@ -127,9 +139,37 @@ def adaptive_budget(n):
     return 270.0
 
 
+# Capacity headroom threshold below which Split DP is included in the
+# portfolio. Above this (i.e. instances where total demand uses ≤ this
+# fraction of fleet capacity) Split DP can move tail segments freely; below
+# this it tends to revert to the construction seed and waste budget.
+_SPLIT_HEADROOM_THRESHOLD = 0.85
+
+
+def _engines_for(data):
+    """Return [(label, solve_fn, weight), ...] for this instance.
+
+    Split DP is gated on capacity utilisation so we don't waste budget on
+    instances where it can't improve. Savings, sweep, and GRASP+LNS are
+    always in the portfolio.
+    """
+    total_demand = sum(int(d) for d in data.demand[1:])
+    fleet_cap = int(data.capacity) * int(data.vehicle_count)
+    util = total_demand / fleet_cap if fleet_cap > 0 else 1.0
+
+    engines = [
+        ("savings",   savings_solve,   55),
+        ("grasp_lns", grasp_lns_solve, 25),
+        ("sweep",     sweep_solve,     12),
+    ]
+    if util <= _SPLIT_HEADROOM_THRESHOLD:
+        engines.append(("split", split_solve, 8))
+    return engines
+
+
 def solve(data, time_limit=None, seed=0, config=None):
     """
-    Solve a CVRP instance using the savings + sweep portfolio.
+    Solve a CVRP instance with a pure-Python construction-family portfolio.
 
     Parameters mirror the other `solver_*.solve(...)` entry points so this
     module is a drop-in for `src/main.py`. `time_limit`, when supplied, is
@@ -145,27 +185,24 @@ def solve(data, time_limit=None, seed=0, config=None):
 
     # Pick size-adapted config (engine extensions are always on); allow
     # external override via `config`.
-    cfg = _config_for_size(int(data.n))
+    base_cfg = _config_for_size(int(data.n))
     if config:
-        cfg.update(config)
+        base_cfg.update(config)
 
-    # 80/20 split — savings is the dominant engine on this instance set,
-    # sweep's diversification is cheap insurance for clustered layouts.
-    budget_savings = max(0.5, total * 0.80)
-    budget_sweep = max(0.5, total * 0.20)
+    engines = _engines_for(data)
+    weight_sum = sum(w for _, _, w in engines)
 
     best_routes, best_cost = None, float("inf")
 
-    routes, cost = savings_solve(
-        data, time_limit=budget_savings, seed=seed, config=cfg
-    )
-    if cost < best_cost:
-        best_routes, best_cost = routes, cost
-
-    routes, cost = sweep_solve(
-        data, time_limit=budget_sweep, seed=seed + 1, config=cfg
-    )
-    if cost < best_cost:
-        best_routes, best_cost = routes, cost
+    for i, (label, fn, weight) in enumerate(engines):
+        budget = max(0.5, total * weight / weight_sum)
+        try:
+            routes, cost = fn(data, time_limit=budget, seed=seed + i, config=base_cfg)
+        except Exception:
+            # Any single engine failure must not take down the portfolio;
+            # the others still produce valid solutions.
+            continue
+        if cost < best_cost:
+            best_routes, best_cost = routes, cost
 
     return best_routes, best_cost
