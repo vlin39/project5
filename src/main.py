@@ -6,18 +6,21 @@ from timer import Timer
 from solver_common import format_solution
 from sol_file_writer import write_sol_file 
 # -----------------------------------------------------------------------------
-# Different implementations go here!! 
+# Different implementations go here!!
 # Use one implementation at a time -- comment out the import/assignment lines that are not being used
 # Not doing it probably won't break anything, but... :/
 # To add a new solver, make sure it's solve(data, time_limit, seed)
 # (But technically, only the data is needed.)
-# Then import it and name it! 
-# 
+# Then import it and name it!
+#
 # from solver_savings import solve
 # SOLVER = "savings_cw_ils" #"savings_clarke_wright_ils"
-# 
+#
 # from solver_sweep import solve
 # SOLVER = "sweep_cluster_tsp_ils"
+#
+# from solver_pyvrp import solve
+# SOLVER = "pyvrp"  # PyVRP / HGS engine — see src/solver_pyvrp.py
 
 # results_savings_fastscreen_10s.log
 SOLVER = "savings"
@@ -42,6 +45,8 @@ if SOLVER == "savings":
     from solver_savings import solve
 elif SOLVER == "sweep":
     from solver_sweep import solve
+elif SOLVER == "pyvrp":
+    from solver_pyvrp import solve
 
 """
     to make it easier to run things:

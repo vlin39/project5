@@ -81,9 +81,14 @@ SAVINGS_CONFIGS = {
     "fewseeds": {"seed_count": 3},  # bias toward fewer/stronger restarts (per log signal)
 }
 
+PYVRP_CONFIGS = {
+    "default": None,
+}
+
 CONFIG_REGISTRY = {
     "savings": SAVINGS_CONFIGS,
     "sweep": SWEEP_CONFIGS,
+    "pyvrp": PYVRP_CONFIGS,
 }
 
 SOLVER = os.getenv("SOLVER", "sweep")
@@ -98,8 +103,12 @@ if SOLVER not in CONFIG_REGISTRY:
 
 if SOLVER == "savings":
     from solver_savings import solve as solve_vrp
-else:
+elif SOLVER == "sweep":
     from solver_sweep import solve as solve_vrp
+elif SOLVER == "pyvrp":
+    from solver_pyvrp import solve as solve_vrp
+else:
+    raise ValueError(f"Unknown SOLVER {SOLVER!r}")
 
 CONFIGS = CONFIG_REGISTRY[SOLVER]
 if CONFIG_NAME not in CONFIGS:
