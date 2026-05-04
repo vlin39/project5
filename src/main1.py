@@ -74,6 +74,24 @@ SAVINGS_CONFIGS = {
         "restart_trigger": 8,
         "accept_prob": 0.25,
     },
+    "v2": {  # tuned + all engine extensions B1-B6
+        "or_opt": True,
+        "two_opt_star": True,
+        "candidate_list_size": 20,
+        "dont_look": True,
+        "sa_acceptance": True,
+        "perturb_mode": ['random', 'route', 'shaw', 'sisr'],
+        "noise_levels": (0.0, 0.01, 0.03, 0.07, 0.12, 0.20),
+        "construction_fraction": 0.40,
+        "construction_passes": 2,
+        "elite_size": 4,
+        "intensify_fraction": 0.10,
+        "base_remove": 6,
+        "max_remove": 20,
+        "top_k": 8,
+        "ls_passes": 4,
+        "restart_trigger": 8,
+    },
     "intensify10": {"intensify_fraction": 0.10},
     "restarttrigger8": {"restart_trigger": 8},
     "destroy_aggressive": {"base_remove": 8, "max_remove": 24},
@@ -85,10 +103,40 @@ PYVRP_CONFIGS = {
     "default": None,
 }
 
+PYVRP_TUNED_CONFIGS = {
+    "default": None,
+}
+
+ORTOOLS_CONFIGS = {
+    "default": None,
+    "tabu": {"metaheuristic": "TABU_SEARCH"},
+    "savings_first": {"first_solution": "SAVINGS"},
+}
+
+SPLIT_CONFIGS = {
+    "default": None,
+}
+
+GRASP_LNS_CONFIGS = {
+    "default": None,
+    "v2": {  # GRASP-LNS with the engine extensions enabled too
+        "or_opt": True,
+        "two_opt_star": True,
+        "candidate_list_size": 20,
+        "dont_look": True,
+        "sa_acceptance": True,
+        "perturb_mode": ['random', 'route', 'shaw', 'sisr'],
+    },
+}
+
 CONFIG_REGISTRY = {
     "savings": SAVINGS_CONFIGS,
     "sweep": SWEEP_CONFIGS,
     "pyvrp": PYVRP_CONFIGS,
+    "pyvrp_tuned": PYVRP_TUNED_CONFIGS,
+    "ortools": ORTOOLS_CONFIGS,
+    "split": SPLIT_CONFIGS,
+    "grasp_lns": GRASP_LNS_CONFIGS,
 }
 
 SOLVER = os.getenv("SOLVER", "sweep")
@@ -107,6 +155,14 @@ elif SOLVER == "sweep":
     from solver_sweep import solve as solve_vrp
 elif SOLVER == "pyvrp":
     from solver_pyvrp import solve as solve_vrp
+elif SOLVER == "pyvrp_tuned":
+    from solver_pyvrp_tuned import solve as solve_vrp
+elif SOLVER == "ortools":
+    from solver_ortools import solve as solve_vrp
+elif SOLVER == "split":
+    from solver_split import solve as solve_vrp
+elif SOLVER == "grasp_lns":
+    from solver_grasp_lns import solve as solve_vrp
 else:
     raise ValueError(f"Unknown SOLVER {SOLVER!r}")
 

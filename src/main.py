@@ -22,6 +22,30 @@ from sol_file_writer import write_sol_file
 # from solver_pyvrp import solve
 # SOLVER = "pyvrp"  # PyVRP / HGS engine — see src/solver_pyvrp.py
 
+# Bundle of engine extensions B1-B6 (Or-opt, 2-opt*, candidate lists,
+# don't-look bits, SA acceptance, SISR perturbation). Default-off; opt in
+# via SOLVER="savings" + CONFIG=SAVINGS_V2_CONFIG.
+SAVINGS_V2_CONFIG = {
+    # Engine extensions
+    "or_opt": True,
+    "two_opt_star": True,
+    "candidate_list_size": 20,
+    "dont_look": True,
+    "sa_acceptance": True,
+    "perturb_mode": ['random', 'route', 'shaw', 'sisr'],
+    # Tuned ILS knobs (winners from prior log analysis)
+    "noise_levels": (0.0, 0.01, 0.03, 0.07, 0.12, 0.20),
+    "construction_fraction": 0.40,
+    "construction_passes": 2,
+    "elite_size": 4,
+    "intensify_fraction": 0.10,
+    "base_remove": 6,
+    "max_remove": 20,
+    "top_k": 8,
+    "ls_passes": 4,
+    "restart_trigger": 8,
+}
+
 # results_savings_fastscreen_10s.log
 SOLVER = "savings"
 TIME_LIMIT = 10.0
@@ -47,6 +71,20 @@ elif SOLVER == "sweep":
     from solver_sweep import solve
 elif SOLVER == "pyvrp":
     from solver_pyvrp import solve
+elif SOLVER == "pyvrp_tuned":
+    from solver_pyvrp_tuned import solve
+elif SOLVER == "ortools":
+    from solver_ortools import solve
+elif SOLVER == "split":
+    from solver_split import solve
+elif SOLVER == "grasp_lns":
+    from solver_grasp_lns import solve
+elif SOLVER == "savings_v2":
+    # Aliased SOLVER name: still uses solver_savings, but with the engine
+    # extensions enabled. Run via:
+    #   SOLVER = "savings_v2"; CONFIG = SAVINGS_V2_CONFIG
+    from solver_savings import solve
+    CONFIG = SAVINGS_V2_CONFIG
 
 """
     to make it easier to run things:

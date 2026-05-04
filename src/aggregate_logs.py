@@ -19,17 +19,24 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-FNAME_RE = re.compile(r"results_(?P<solver>[a-z]+)_(?P<config>.+?)_(?P<time>\d+)s\.log$")
+# Matches the standard sweep filenames like results_savings_balanced_30s.log.
+FNAME_RE_FULL = re.compile(r"results_(?P<solver>[a-z_]+)_(?P<config>[a-z0-9_]+?)_(?P<time>\d+)s\.log$")
+# Matches the bare per-method filenames like results_pyvrp.log.
+FNAME_RE_BARE = re.compile(r"results_(?P<solver>[a-z_]+)\.log$")
 
 
 def collect(dirs):
     rows = defaultdict(dict)  # rows[instance][(solver,config,time)] = (cost, wall)
     for d in dirs:
         for fp in sorted(Path(d).glob("*.log")):
-            m = FNAME_RE.search(fp.name)
-            if not m:
-                continue
-            key = (m.group("solver"), m.group("config"), int(m.group("time")))
+            m = FNAME_RE_FULL.search(fp.name)
+            if m:
+                key = (m.group("solver"), m.group("config"), int(m.group("time")))
+            else:
+                m = FNAME_RE_BARE.search(fp.name)
+                if not m:
+                    continue
+                key = (m.group("solver"), "default", 0)
             for line in fp.read_text().splitlines():
                 line = line.strip()
                 if not line:
