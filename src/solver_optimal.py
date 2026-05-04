@@ -1,49 +1,51 @@
 """
-Pure-Python portfolio CVRP solver — no external VRP libraries.
+Pure-Python CVRP solver — no external VRP libraries.
 
-The production solver for this project. The "external library" prohibition
-rules out PyVRP and OR-Tools; classic algorithms (Split DP, GRASP+LNS,
-KNN candidate lists, etc.) are fair game and are used heavily.
+The production solver for this project. Dispatches by instance size:
 
-Construction-family portfolio
------------------------------
-  1. Clarke-Wright savings + ILS  (solver_savings.solve)
-  2. GRASP construction + LNS     (solver_grasp_lns.solve)
-       — k-means clusters, biggest-demand-first insertion, then LNS
-  3. Angular sweep + ILS          (solver_sweep.solve)
-  4. CW giant-tour + Split DP     (solver_split.solve)
-       — only included on instances with loose capacity headroom; on
-       capacity-tight instances the cardinality-constrained DP collapses
-       to the construction baseline so it is excluded by default.
+  n <= 200 : run `solver_savings` alone with the full per-instance budget
+             and a richly-seeded config. Savings already runs an internal
+             multi-seed * multi-noise construction pool, so it IS a config
+             portfolio inside one engine — fragmenting the budget across
+             extra engines only steals time from its own restarts.
 
-All four engines run the same enhanced ILS through `solver_common`, which
-has every B-series enhancement enabled here:
+  n >  200 : run a 3-engine portfolio of construction families
+             (savings + GRASP+LNS + sweep, weighted 60/30/10). On the
+             largest instances different constructions seed different
+             basins that the shared ILS engine then refines; the
+             diversification is worth more than extra savings restarts
+             at this size.
 
-  B1. Or-opt   — relocate segments of length 2 and 3
-  B2. 2-opt*   — true cross-route 2-opt edge exchange
-  B3. KNN candidate lists — top-K nearest-neighbor pruning of cross-route
-                             insertions
+All engines share the same enhanced ILS in `solver_common`, with every
+B-series enhancement always on:
+
+  B1. Or-opt              — relocate segments of length 2 / 3
+  B2. 2-opt*              — true cross-route 2-opt edge exchange
+  B3. KNN candidate lists — top-K nearest-neighbour pruning of cross-route
+                            insertions (huge per-iteration speedup)
   B4. Don't-look bits     — skip customers whose neighborhood was scanned
-                             without improvement until a neighbor changes
-  B5. SA acceptance       — temperature-cooled acceptance in finish_with_ils
-  B6. SISR (string removal) — geographic-string destroy operator alongside
-                              random / route / shaw
+                            without improvement, until a neighbor changes
+  B5. SA acceptance       — temperature-cooled probabilistic acceptance
+                            inside `finish_with_ils`
+  B6. SISR perturbation   — geographic-string removal alongside the
+                            classic random / route / shaw destroy operators
 
-This module wires the B1-B6 toggles, picks a per-instance time budget,
-allocates that budget across the engines (heaviest weight on savings — the
-empirical winner on this project's instance set, with smaller weights on
-the diversifier engines), runs them in sequence, and returns the best.
+Pipeline at a glance:
 
-`solver_pyvrp_reference.py` is a separate file that wraps PyVRP and is
-explicitly NOT imported here; it is kept in the tree only as a baseline
-for diagnostic comparisons.
+  main.py
+   └── solver_optimal.solve(data)
+         ├── adaptive_budget(n)      — per-instance time budget
+         ├── _config_for_size(n)     — size-tuned ILS knobs + B1-B6
+         └── dispatch by n:
+               n <= 200 : savings_solve(...)
+               n >  200 : portfolio of {savings, grasp_lns, sweep}
+                          → take the lowest-cost result
 """
 
 from solver_common import ensure_data, DEFAULT_TIME_LIMIT
 from solver_savings import solve as savings_solve
 from solver_sweep import solve as sweep_solve
 from solver_grasp_lns import solve as grasp_lns_solve
-from solver_split import solve as split_solve
 
 
 # Always-on engine extensions (B1-B6).
@@ -60,16 +62,17 @@ ENGINE_EXTENSIONS = {
 def _config_for_size(n):
     """ILS knobs adapted to instance size.
 
-    Small instances (n<=50): the LS converges in milliseconds, so the
-    binding constraint is *basin diversity* — push more seeds with wider
-    noise levels and a heavier construction phase. (Without this, savings
-    plateaus at the wrong local optimum on instances like 16_5_1, 21_4_1.)
-
-    Medium (50<n<=200): the prior log winners — moderate noise, balanced
-    construction/intensify split.
-
-    Large (n>200): construction is expensive per seed, so spawn fewer
-    seeds and put the time into deep ILS perturbation cycles.
+    Small (n<=50)         — many noisy seeds; LS converges in milliseconds
+                            so basin diversity is the binding constraint.
+    Medium (50<n<=200)    — wide construction pool tuned to the union of
+                            the historical per-instance winners
+                            (restart_trigger=12, noise_low, intensify=0.10,
+                            etc.). Single-savings handles this band on its
+                            own.
+    Large (n>200)         — fewer seeds with deeper LS per restart;
+                            paired with the construction-family portfolio
+                            in solve() so different starting points get
+                            equal access to the shared ILS.
     """
     cfg = dict(ENGINE_EXTENSIONS)
     if n <= 50:
@@ -88,18 +91,24 @@ def _config_for_size(n):
             "accept_prob": 0.20,
         })
     elif n <= 200:
+        # Enriched config — union of historical per-instance winners
+        # (restart12, noise_low, balanced, intensify10, restarttrigger8,
+        # diversified). Wider noise vector covers both the broad-noise
+        # cases and the narrow-noise winner on 151_15_1; seed_count and
+        # elite_size match the prior winners' values.
         cfg.update({
-            "noise_levels": (0.0, 0.01, 0.03, 0.07, 0.12, 0.20),
-            "seed_count": 6,
-            "elite_size": 4,
-            "construction_fraction": 0.35,
+            "noise_levels": (0.0, 0.005, 0.01, 0.02, 0.03, 0.05,
+                             0.07, 0.12, 0.20),
+            "seed_count": 8,
+            "elite_size": 6,
+            "construction_fraction": 0.40,
             "construction_passes": 3,
-            "intensify_fraction": 0.15,
+            "intensify_fraction": 0.12,
             "base_remove": 6,
             "max_remove": 20,
             "top_k": 8,
             "ls_passes": 5,
-            "restart_trigger": 8,
+            "restart_trigger": 10,
             "accept_prob": 0.20,
         })
     else:
@@ -123,53 +132,36 @@ def _config_for_size(n):
 def adaptive_budget(n):
     """Per-instance time budget in seconds, keyed on customer count.
 
-    Sized so that small instances finish within a fraction of the
-    project's 300s/instance shell ceiling and large instances run their
-    full ILS convergence cycle. With the small-instance config above,
-    n<=50 needs ~20s to reliably escape the wrong local optimum.
+    Sized so that small instances finish in a fraction of the project's
+    300s/instance shell ceiling and large instances run their full ILS
+    convergence cycle. Medium-band budgets are bumped vs. the prior
+    portfolio version because the new dispatch hands the entire budget
+    to one engine instead of splitting it across four.
     """
     if n <= 50:
         return 25.0
     if n <= 100:
-        return 50.0
+        return 60.0
     if n <= 200:
-        return 100.0
+        return 120.0
     if n <= 300:
         return 200.0
     return 270.0
 
 
-# Capacity headroom threshold below which Split DP is included in the
-# portfolio. Above this (i.e. instances where total demand uses ≤ this
-# fraction of fleet capacity) Split DP can move tail segments freely; below
-# this it tends to revert to the construction seed and waste budget.
-_SPLIT_HEADROOM_THRESHOLD = 0.85
-
-
-def _engines_for(data):
-    """Return [(label, solve_fn, weight), ...] for this instance.
-
-    Split DP is gated on capacity utilisation so we don't waste budget on
-    instances where it can't improve. Savings, sweep, and GRASP+LNS are
-    always in the portfolio.
-    """
-    total_demand = sum(int(d) for d in data.demand[1:])
-    fleet_cap = int(data.capacity) * int(data.vehicle_count)
-    util = total_demand / fleet_cap if fleet_cap > 0 else 1.0
-
-    engines = [
-        ("savings",   savings_solve,   55),
-        ("grasp_lns", grasp_lns_solve, 25),
-        ("sweep",     sweep_solve,     12),
-    ]
-    if util <= _SPLIT_HEADROOM_THRESHOLD:
-        engines.append(("split", split_solve, 8))
-    return engines
+# Portfolio composition for the n>200 dispatch path.
+# Savings is the dominant engine; grasp_lns provides the construction
+# diversity that wins on 200_16_2 and 386_47_1; sweep covers 241_22_1.
+_LARGE_PORTFOLIO = [
+    ("savings",   savings_solve,   60),
+    ("grasp_lns", grasp_lns_solve, 30),
+    ("sweep",     sweep_solve,     10),
+]
 
 
 def solve(data, time_limit=None, seed=0, config=None):
     """
-    Solve a CVRP instance with a pure-Python construction-family portfolio.
+    Solve a CVRP instance with a pure-Python construction-family pipeline.
 
     Parameters mirror the other `solver_*.solve(...)` entry points so this
     module is a drop-in for `src/main.py`. `time_limit`, when supplied, is
@@ -177,30 +169,38 @@ def solve(data, time_limit=None, seed=0, config=None):
     budget is clamped under it.
     """
     data = ensure_data(data)
+    n = int(data.n)
 
-    total = adaptive_budget(int(data.n))
+    total = adaptive_budget(n)
     if time_limit is not None:
         # Leave a margin so we always return before the shell timeout fires.
         total = min(total, max(1.0, float(time_limit) - 5.0))
 
-    # Pick size-adapted config (engine extensions are always on); allow
-    # external override via `config`.
-    base_cfg = _config_for_size(int(data.n))
+    base_cfg = _config_for_size(n)
     if config:
         base_cfg.update(config)
 
-    engines = _engines_for(data)
-    weight_sum = sum(w for _, _, w in engines)
+    # n <= 200: single-engine path. Savings' internal seed_count * noise
+    # construction pool already provides the config-portfolio diversity
+    # that the historical per-instance winners came from.
+    if n <= 200:
+        return savings_solve(
+            data, time_limit=total, seed=seed, config=base_cfg
+        )
 
+    # n > 200: multi-engine portfolio. The diversifier engines pay off
+    # on the hardest instances where construction quality dominates LS
+    # depth.
+    weight_sum = sum(w for _, _, w in _LARGE_PORTFOLIO)
     best_routes, best_cost = None, float("inf")
-
-    for i, (label, fn, weight) in enumerate(engines):
+    for i, (label, fn, weight) in enumerate(_LARGE_PORTFOLIO):
         budget = max(0.5, total * weight / weight_sum)
         try:
-            routes, cost = fn(data, time_limit=budget, seed=seed + i, config=base_cfg)
+            routes, cost = fn(
+                data, time_limit=budget, seed=seed + i, config=base_cfg
+            )
         except Exception:
-            # Any single engine failure must not take down the portfolio;
-            # the others still produce valid solutions.
+            # Any single engine failure must not take down the portfolio.
             continue
         if cost < best_cost:
             best_routes, best_cost = routes, cost
