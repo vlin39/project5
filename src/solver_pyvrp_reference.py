@@ -1,12 +1,21 @@
 """
-PyVRP backend — wraps Vidal's HGS-CVRP-derived Hybrid ILS engine.
+REFERENCE ONLY — NOT USED BY THE PRODUCTION SOLVER.
 
-Exposes a `solve(data, time_limit=None, seed=0, config=None)` entry point that
-matches `solver_savings.solve` / `solver_sweep.solve`, so it can be plugged
-into `src/main.py` or `src/main1.py` the same way.
+This module wraps the third-party PyVRP library (Vidal's HGS-CVRP-derived
+Hybrid ILS engine). It is kept in this branch only as a reference baseline
+for empirical comparison against `solver_optimal.solve(...)`, which is
+written in pure Python and uses no external VRP libraries.
 
-Notes
------
+Do NOT import this from `solver_optimal.py` or `main.py`. The production
+pipeline must remain library-free per the project constraints.
+
+If you do want to compare numbers, you can call `solve(...)` here directly
+from a one-off script. The interface matches `solver_savings.solve` /
+`solver_sweep.solve` so it could be slotted into a SOLVER dispatch — but
+again, that's for diagnostics only, not for the submitted solution.
+
+Implementation notes
+--------------------
 - PyVRP works in integer arithmetic. Coordinates, demands, and capacities are
   scaled by SCALE so capacity-tight instances (e.g. 16_5_1 at 94% utilisation)
   don't bottom out the integer penalty mechanism. We descale the cost on the
