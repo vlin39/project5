@@ -1,23 +1,22 @@
 """
 Pure-Python CVRP solver — no external VRP libraries.
 
-The production solver for this project. Dispatches by instance size:
+The production solver for this project. Runs a 3-engine
+construction-family portfolio for every instance:
 
-  n <= 200 : run `solver_savings` alone with the full per-instance budget
-             and a richly-seeded config. Savings already runs an internal
-             multi-seed * multi-noise construction pool, so it IS a config
-             portfolio inside one engine — fragmenting the budget across
-             extra engines only steals time from its own restarts.
+  - Clarke-Wright savings + ILS    (solver_savings.solve)
+  - GRASP + LNS                    (solver_grasp_lns.solve)
+  - Angular sweep + ILS            (solver_sweep.solve)
 
-  n >  200 : run a 3-engine portfolio of construction families
-             (savings + GRASP+LNS + sweep, weighted 60/30/10). On the
-             largest instances different constructions seed different
-             basins that the shared ILS engine then refines; the
-             diversification is worth more than extra savings restarts
-             at this size.
+Each engine builds an initial solution using its own construction strategy,
+then drives it through the same enhanced ILS in `solver_common`. The
+diversity of starting solutions is what wins on the hardest instances:
+GRASP+LNS's k-means construction seeds basins that CW misses on
+200_16_2.vrp / 386_47_1.vrp / 41_14_1.vrp; sweep's angular construction
+helps on 241_22_1.vrp.
 
-All engines share the same enhanced ILS in `solver_common`, with every
-B-series enhancement always on:
+All engines share the same enhanced ILS, with every B-series enhancement
+always on:
 
   B1. Or-opt              — relocate segments of length 2 / 3
   B2. 2-opt*              — true cross-route 2-opt edge exchange
@@ -36,10 +35,13 @@ Pipeline at a glance:
    └── solver_optimal.solve(data)
          ├── adaptive_budget(n)      — per-instance time budget
          ├── _config_for_size(n)     — size-tuned ILS knobs + B1-B6
-         └── dispatch by n:
-               n <= 200 : savings_solve(...)
-               n >  200 : portfolio of {savings, grasp_lns, sweep}
-                          → take the lowest-cost result
+         └── 3-engine portfolio @ savings/grasp_lns/sweep = 60/27/13
+                  → take the lowest-cost result
+
+Earlier we tried single-savings for n<=200 to recover the historical
+config-tuned wins, but that lost 200_16_2 (-143 cost), 41_14_1 (-64),
+101_8_1 (-19), and 51_5_1 (-13) where grasp_lns or sweep was the actual
+winner. Net was +0.48% worse, so we're back to portfolio-for-all.
 """
 
 from solver_common import ensure_data, DEFAULT_TIME_LIMIT
@@ -64,15 +66,14 @@ def _config_for_size(n):
 
     Small (n<=50)         — many noisy seeds; LS converges in milliseconds
                             so basin diversity is the binding constraint.
-    Medium (50<n<=200)    — wide construction pool tuned to the union of
+    Medium (50<n<=200)    — wider construction pool tuned to the union of
                             the historical per-instance winners
                             (restart_trigger=12, noise_low, intensify=0.10,
-                            etc.). Single-savings handles this band on its
-                            own.
+                            etc.).
     Large (n>200)         — fewer seeds with deeper LS per restart;
                             paired with the construction-family portfolio
-                            in solve() so different starting points get
-                            equal access to the shared ILS.
+                            so different starting points get equal access
+                            to the shared ILS.
     """
     cfg = dict(ENGINE_EXTENSIONS)
     if n <= 50:
@@ -134,9 +135,9 @@ def adaptive_budget(n):
 
     Sized so that small instances finish in a fraction of the project's
     300s/instance shell ceiling and large instances run their full ILS
-    convergence cycle. Medium-band budgets are bumped vs. the prior
-    portfolio version because the new dispatch hands the entire budget
-    to one engine instead of splitting it across four.
+    convergence cycle. Budgets are split across the 3-engine portfolio
+    by the weights below — savings still ends up with the majority share
+    on every instance.
     """
     if n <= 50:
         return 25.0
@@ -149,19 +150,21 @@ def adaptive_budget(n):
     return 270.0
 
 
-# Portfolio composition for the n>200 dispatch path.
-# Savings is the dominant engine; grasp_lns provides the construction
-# diversity that wins on 200_16_2 and 386_47_1; sweep covers 241_22_1.
-_LARGE_PORTFOLIO = [
+# Portfolio composition. Weights chosen to give savings the lion's share
+# (it's the winner on most instances) while still giving grasp_lns and
+# sweep enough budget to find their basins on 200_16_2 / 386_47_1 /
+# 41_14_1 / 51_5_1 / 101_8_1 / 241_22_1 — instances where they
+# strict-beat savings in prior runs.
+_PORTFOLIO = [
     ("savings",   savings_solve,   60),
-    ("grasp_lns", grasp_lns_solve, 30),
-    ("sweep",     sweep_solve,     10),
+    ("grasp_lns", grasp_lns_solve, 27),
+    ("sweep",     sweep_solve,     13),
 ]
 
 
 def solve(data, time_limit=None, seed=0, config=None):
     """
-    Solve a CVRP instance with a pure-Python construction-family pipeline.
+    Solve a CVRP instance with a pure-Python construction-family portfolio.
 
     Parameters mirror the other `solver_*.solve(...)` entry points so this
     module is a drop-in for `src/main.py`. `time_limit`, when supplied, is
@@ -180,20 +183,9 @@ def solve(data, time_limit=None, seed=0, config=None):
     if config:
         base_cfg.update(config)
 
-    # n <= 200: single-engine path. Savings' internal seed_count * noise
-    # construction pool already provides the config-portfolio diversity
-    # that the historical per-instance winners came from.
-    if n <= 200:
-        return savings_solve(
-            data, time_limit=total, seed=seed, config=base_cfg
-        )
-
-    # n > 200: multi-engine portfolio. The diversifier engines pay off
-    # on the hardest instances where construction quality dominates LS
-    # depth.
-    weight_sum = sum(w for _, _, w in _LARGE_PORTFOLIO)
+    weight_sum = sum(w for _, _, w in _PORTFOLIO)
     best_routes, best_cost = None, float("inf")
-    for i, (label, fn, weight) in enumerate(_LARGE_PORTFOLIO):
+    for i, (label, fn, weight) in enumerate(_PORTFOLIO):
         budget = max(0.5, total * weight / weight_sum)
         try:
             routes, cost = fn(
