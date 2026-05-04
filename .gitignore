@@ -1,1 +1,10 @@
+# Python bytecode caches
+__pycache__/
+*.pyc
+*.pyo
 
+# runAll_sweep.sh / runAll.sh per-instance scratch
+output.tmp
+
+# Local venv (compile.sh creates ./venv)
+venv/
