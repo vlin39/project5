@@ -9,10 +9,6 @@ output.tmp
 # Local venv (compile.sh creates ./venv)
 venv/
 
-# In-progress benchmark logs — appended one line per instance; explicitly
-# `git add -f` them once they hit 16 records (one per input/*.vrp).
-results_ortools.log
-results_pyvrp_tuned.log
-results_savings_v2.log
-results_split.log
-results_grasp_lns.log
+# In-progress benchmark log — appended one line per instance; force-add
+# it once it hits 16 records (one per input/*.vrp).
+results.log

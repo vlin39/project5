@@ -122,12 +122,12 @@ def solve(data, time_limit=None, seed=0, config=None):
     result = model.solve(**solve_kwargs)
 
     if not result.is_feasible():
-        # Fall back to running the existing savings solver if PyVRP couldn't
-        # find a feasible solution within the budget. This shouldn't happen
-        # for well-posed instances at SCALE=1000, but we don't want to
-        # silently emit garbage.
-        from solver_savings import solve as savings_solve
-        return savings_solve(data, time_limit=tl, seed=seed, config=None)
+        # PyVRP didn't converge to feasibility within the budget. As a last
+        # resort, fall back to a deterministic capacity-feasible packing.
+        # This rarely fires on the project's input/ instances at SCALE=1000.
+        from solver_common import greedy_pack_all_customers
+        routes = normalize_routes(data, greedy_pack_all_customers(data))
+        return routes, solution_cost(data, routes)
 
     routes = _result_to_routes(data, result)
     # Recompute cost in the project's (unscaled, float) metric.
