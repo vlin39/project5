@@ -70,8 +70,15 @@ def route_load(data, route):
     return sum(data.demand[i] for i in route if i != 0)
 
 
-def format_solution(routes):
-    return ' '.join(str(x) for r in routes for x in r)
+def format_solution(routes, optimality_flag=0):
+    """Flatten routes into the project's wire format.
+
+    Output is "<flag> <r0_node0> ... <rN-1_nodeM>" where the leading flag
+    is the proven-optimal indicator (0 = not proved, 1 = proved). We never
+    prove optimality, so callers should leave the default of 0.
+    """
+    body = ' '.join(str(x) for r in routes for x in r)
+    return f"{int(optimality_flag)} {body}"
 
 
 def adaptive_time_limit(data, requested=None):

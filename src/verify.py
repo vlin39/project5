@@ -56,12 +56,20 @@ def distance(data, i, j):
 
 def parse_flattened_solution(solution, vehicles):
     """
-    "0 1 2 0 0 3 4 0 0 0 0 0" -> [[0,1,2,0], [0,3,4,0], [0,0], [0,0]]
+    "0 0 1 2 0 0 3 4 0 0 0 0 0" -> (flag, [[0,1,2,0], [0,3,4,0], [0,0], [0,0]])
+
+    First token is the optimality flag (0 = not proved, 1 = proved); the
+    rest is the flattened routes split on consecutive depot-zero pairs.
     """
     if solution is None or solution == "--":
         raise ValueError("No solution string provided")
 
     tokens = [int(x) for x in str(solution).split()]
+    if not tokens:
+        raise ValueError("Empty solution string")
+    flag = tokens[0]
+    tokens = tokens[1:]
+
     routes = []
     current = []
 
@@ -82,7 +90,7 @@ def parse_flattened_solution(solution, vehicles):
         while len(routes) < vehicles:
             routes.append([0, 0])
 
-    return routes[:vehicles]
+    return flag, routes[:vehicles]
 
 
 def parse_sol(text):
