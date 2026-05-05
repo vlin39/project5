@@ -120,9 +120,9 @@ def parse_json_record(record, vehicles):
     if record.get("Result") in (None, "--") or record.get("Solution") in (None, "--"):
         raise ValueError("JSON record does not contain a usable Result/Solution")
 
-    routes = parse_flattened_solution(record["Solution"], vehicles)
+    flag, routes = parse_flattened_solution(record["Solution"], vehicles)
     reported_obj = float(record["Result"])
-    return routes, reported_obj, 0, record
+    return routes, reported_obj, flag, record
 
 
 def read_json_records_from_file(path):
