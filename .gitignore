@@ -12,3 +12,7 @@ venv/
 # In-progress benchmark log — appended one line per instance; force-add
 # it once it hits 16 records (one per input/*.vrp).
 results.log
+
+# Output of `python3 src/sol_file_writer.py results.log` — derived
+# .vrp.sol files, regenerable from results.log.
+results_solutions/
